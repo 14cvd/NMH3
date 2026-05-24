@@ -26,7 +26,8 @@ Add NMH3 as a local dependency in your `Package.swift` or Xcode Project:
 
 ```swift
 dependencies: [
-    .package(path: "../Core/NMH3")
+    .package(path: "https://github.com/14cvd/NMH3.git")
+    
 ],
 targets: [
     .target(
