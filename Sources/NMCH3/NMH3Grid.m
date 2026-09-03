@@ -1,45 +1,57 @@
 #import "NMH3Grid.h"
+#import "h3api.h"
 #import <math.h>
-static const int NUM_FACES = 20;
-static const int NUM_BASE_CELLS = 122;
 
 H3Index NMH3GeoToH3(double lat, double lng, NSInteger resolution) {
-    uint64_t r = (uint64_t)(resolution & 0xF) << 52;
-    uint64_t latBits = (uint64_t)((lat + 90.0) * 10000.0) & 0xFFFFFF;
-    uint64_t lngBits = (uint64_t)((lng + 180.0) * 10000.0) & 0xFFFFFF;
-    return 0x0800000000000000ULL | r | (latBits << 24) | lngBits;
+    LatLng coord = { .lat = degsToRads(lat), .lng = degsToRads(lng) };
+    H3Index out = 0;
+    latLngToCell(&coord, (int)resolution, &out);
+    return out;
 }
 
 NMGeoCoord NMH3ToGeo(H3Index index) {
-    uint64_t latBits = (index >> 24) & 0xFFFFFF;
-    uint64_t lngBits = index & 0xFFFFFF;
+    LatLng coord = {0};
+    cellToLatLng(index, &coord);
     NMGeoCoord c;
-    c.lat = (double)latBits / 10000.0 - 90.0;
-    c.lng = (double)lngBits / 10000.0 - 180.0;
+    c.lat = radsToDegs(coord.lat);
+    c.lng = radsToDegs(coord.lng);
     return c;
 }
 
 NSArray<NSValue*>* NMH3ToGeoBoundary(H3Index index) {
-    NMGeoCoord center = NMH3ToGeo(index);
-    double r = NMH3HexRadiusKm(NMH3GetResolution(index)) / 111.0;
-    NSMutableArray* arr = [NSMutableArray new];
-    for (int i=0; i<6; i++) {
-        double angle = 2.0 * M_PI * i / 6.0;
+    CellBoundary boundary = {0};
+    cellToBoundary(index, &boundary);
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:boundary.numVerts];
+    for (int i = 0; i < boundary.numVerts; i++) {
         NMGeoCoord pt;
-        pt.lat = center.lat + r * sin(angle);
-        pt.lng = center.lng + r * cos(angle);
+        pt.lat = radsToDegs(boundary.verts[i].lat);
+        pt.lng = radsToDegs(boundary.verts[i].lng);
         [arr addObject:[NSValue valueWithBytes:&pt objCType:@encode(NMGeoCoord)]];
     }
     return arr;
 }
 
-double NMH3HexAreaKm2(NSInteger res) { return 4.0 / pow(2.0, res); }
-double NMH3HexRadiusKm(NSInteger res) { return sqrt(NMH3HexAreaKm2(res)); }
-double NMH3EdgeLengthKm(NSInteger res) { return NMH3HexRadiusKm(res) * 0.9; }
+double NMH3HexAreaKm2(NSInteger res) {
+    double out = 0.0;
+    getHexagonAreaAvgKm2((int)res, &out);
+    return out;
+}
+
+double NMH3HexRadiusKm(NSInteger res) {
+    // Radius is derived from area: area of regular hexagon = (3√3/2)r²
+    // So r = sqrt(area * 2 / (3√3))
+    double areKm2 = NMH3HexAreaKm2(res);
+    return sqrt(areKm2 * 2.0 / (3.0 * sqrt(3.0)));
+}
+
+double NMH3EdgeLengthKm(NSInteger res) {
+    double out = 0.0;
+    getHexagonEdgeLengthAvgKm((int)res, &out);
+    return out;
+}
+
 double NMH3HaversineDistanceKm(double lat1, double lng1, double lat2, double lng2) {
-    double r = 6371.0;
-    double dLat = (lat2 - lat1) * M_PI / 180.0;
-    double dLng = (lng2 - lng1) * M_PI / 180.0;
-    double a = sin(dLat/2)*sin(dLat/2) + cos(lat1*M_PI/180.0)*cos(lat2*M_PI/180.0)*sin(dLng/2)*sin(dLng/2);
-    return r * 2 * atan2(sqrt(a), sqrt(1-a));
+    LatLng a = { .lat = degsToRads(lat1), .lng = degsToRads(lng1) };
+    LatLng b = { .lat = degsToRads(lat2), .lng = degsToRads(lng2) };
+    return greatCircleDistanceKm(&a, &b);
 }

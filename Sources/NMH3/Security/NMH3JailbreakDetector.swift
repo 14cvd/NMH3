@@ -4,6 +4,16 @@ import Foundation
 public final class NMH3JailbreakDetector: Sendable {
     public init() {}
 
+    /// Returns `true` if the device shows signs of being jailbroken.
+    ///
+    /// - Important: This is a **best-effort heuristic**, not a security boundary.
+    ///   Static file-path checks (Cydia, MobileSubstrate, etc.) are trivially bypassed
+    ///   by any modern path-hiding jailbreak tweak. The sandbox write test (`/private/`)
+    ///   adds a small additional layer but is also bypassable.
+    ///
+    ///   Do **not** use the result of this method as the sole gate for sensitive
+    ///   operations. Treat it as a weak signal to be combined with server-side checks,
+    ///   certificate pinning, and other defence-in-depth measures.
     public func isCompromised() -> Bool {
         let paths = [
             "/Applications/Cydia.app",
