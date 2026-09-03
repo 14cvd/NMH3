@@ -1,39 +1,36 @@
 # NMH3
 
-**NMH3** is a production-ready Swift Package providing a high-performance, privacy-first implementation of Uber's [H3 Geospatial Indexing System](https://h3geo.org/) for iOS and macOS.
+> [!NOTE]
+> **Backend Compatibility:** Output H3 indices are bit-for-bit compatible with Uber's canonical H3 format (v4.x). Indices produced by this library can be consumed directly by `h3-go`, `h3-pg`, `h3-js`, and any other standard H3 implementation.
 
-This package is fully self-contained with no external dependencies. It features a highly optimized pure Objective-C/C core (`NMCH3`) wrapped in a modern, Swift 6 compatible, actor-isolated public API (`NMH3`).
+**NMH3** is a Swift Package providing a high-performance implementation of Uber's [H3 Geospatial Indexing System](https://h3geo.org/) for iOS and macOS.
+
+The package uses a vendored build of Uber's official open-source [H3 C core](https://github.com/uber/h3) (v4.1.0, Apache-2.0) as the `NMCH3` target, wrapped by a modern Swift 6–compatible API. This means all H3 indices are canonical, spec-compliant, and fully interoperable with any standard H3 backend.
 
 ## 🏗 Architecture
 
-The package is divided into two distinct targets to maximize performance and interoperability:
+The package is divided into two targets:
 
-*   **`NMCH3` (Objective-C Core):**
-    *   Handles low-level mathematical operations: Icosahedron projections, base cell mapping, and hex boundary calculations.
-    *   Optimized for zero heap allocations in performance-critical paths.
-    *   Exposes a C-compatible interface for maximum speed.
+*   **`NMCH3` (C + Objective-C):**
+    *   Vendors the official Uber H3 C library (v4.1.0).
+    *   Thin Objective-C wrappers expose the C functions to Swift.
+    *   Handles: icosahedron projections, base-cell mapping, hex boundary calculations, hierarchical indexing, k-ring traversal, polyfill, grid distance, and compact/uncompact.
 
 *   **`NMH3` (Swift Public API):**
-    *   Provides a modern developer experience using Swift Concurrency (async/await) and Combine.
-    *   Integrates with MapKit for easy visualization.
-    *   Implements a dedicated mobile layer for battery-efficient location tracking and dynamic geofencing.
+    *   Modern developer experience using Combine.
+    *   MapKit integration for visualisation.
+    *   Mobile layer: battery-aware GPS scaling, motion-aware location tracking, and dynamic geofencing (overcomes iOS's 20-region limit via rotation).
 
 ---
 
 ## 🚀 Installation
 
-Add NMH3 as a local dependency in your `Package.swift` or Xcode Project:
-
 ```swift
 dependencies: [
-    .package(path: "https://github.com/14cvd/NMH3.git")
-    
+    .package(url: "https://github.com/14cvd/NMH3.git", from: "1.0.0")
 ],
 targets: [
-    .target(
-        name: "YourFeatureModule",
-        dependencies: ["NMH3"]
-    )
+    .target(name: "YourFeatureModule", dependencies: ["NMH3"])
 ]
 ```
 
@@ -42,7 +39,6 @@ targets: [
 ## 📖 Key Features & Usage
 
 ### 1. Spatial Encoding and Decoding
-Convert standard coordinates into H3 hexagonal indices and vice versa.
 
 ```swift
 import CoreLocation
@@ -50,72 +46,125 @@ import NMH3
 
 let coordinate = CLLocationCoordinate2D(latitude: 40.3893, longitude: 49.8529)
 
-// 1. Encode coordinate to H3 Cell at resolution 9
+// Encode coordinate to H3 Cell at resolution 9
 let cell = NMH3Kit.shared.cell(for: coordinate, resolution: .r9)
-print("H3 Index (Hex String): \(cell.string)")
+print("H3 Index: \(cell.string)")  // e.g. "8944c0b5153ffff"
 
-// 2. Decode Cell back to center coordinate
+// Decode Cell back to center coordinate
 let center = NMH3Kit.shared.center(of: cell)
 
-// 3. Get precise hexagon boundary vertices
+// Get hexagon boundary vertices (6 for hex, 5 for pentagon)
 let boundary = NMH3Kit.shared.boundary(of: cell)
 ```
 
-### 2. Privacy-First Location Tracking
-`NMH3LocationManager` ensures that raw GPS coordinates never linger in memory. It immediately converts `CLLocation` objects into `H3Cell` indices and scrubs the original data.
+### 2. Privacy-Aware Location Tracking
+
+`NMH3LocationManager` converts raw `CLLocation` updates to H3 cell indices immediately, without retaining the coordinate in any property. It dynamically adjusts GPS accuracy and distance filter based on resolution.
 
 ```swift
 import Combine
 import NMH3
 
 let locationManager = NMH3LocationManager()
-locationManager.resolution = .r9 // Hex size (~0.1 km²)
+locationManager.resolution = .r9  // ~0.1 km² hex cells
 
 locationManager.currentCellPublisher
-    .sink { cell in
-        print("User entered new hex: \(cell.string)")
-    }
+    .sink { cell in print("User entered: \(cell.string)") }
     .store(in: &cancellables)
 
 locationManager.start()
 ```
 
-### 3. Dynamic Geofencing (iOS Region Limit Workaround)
-iOS natively limits apps to monitoring 20 `CLCircularRegion`s at once. `NMH3GeofenceManager` overcomes this by dynamically rotating monitored regions based on the user's surrounding H3 cells.
+> **Note on "Zero-Retention":** `CLLocationCoordinate2D` is a Swift value type. It is not possible to scrub the original `CLLocation` object from memory by zeroing a local copy. The privacy guarantee here is narrower but real: the raw coordinate is never stored in any property, logged, or persisted — only the H3 cell index is published.
+
+### 3. Battery-Aware Tracking
+
+`NMH3BatteryOptimizer` monitors battery level and motion state, publishing a `BatteryProfile`. `NMH3LocationManager` subscribes to it and adjusts `desiredAccuracy` and `distanceFilter` automatically:
+
+| Profile | Level | `desiredAccuracy` | `distanceFilter` |
+|---|---|---|---|
+| `.ultraLow` | <20% | `kCLLocationAccuracyKilometer` | 500 m |
+| `.low` | 20–40% | `kCLLocationAccuracyHundredMeters` | 200 m |
+| `.balanced` | 40–80% | Resolution-appropriate | Resolution-appropriate |
+| `.high` | >80% | `kCLLocationAccuracyBestForNavigation` | ≥10 m |
+
+When the device is stationary (via `CMMotionActivityManager`), the distance filter is raised further to suppress redundant wake-ups.
 
 ```swift
-let geofenceManager = NMH3GeofenceManager()
-let targetCells: [H3Cell] = [/* List of store location cells */]
-
-geofenceManager.monitorCells(targetCells) { cell in
-    print("Welcome! You entered store zone: \(cell.string)")
-} onExit: { cell in
-    print("You left the zone.")
-}
+let optimizer = NMH3BatteryOptimizer()
+let locationManager = NMH3LocationManager(batteryOptimizer: optimizer)
+locationManager.start()
 ```
 
-### 4. Battery & Security
-*   **Battery Optimization:** `NMH3BatteryOptimizer` automatically scales GPS precision based on battery level and device motion.
-*   **Jailbreak Detection:** `NMH3JailbreakDetector` identifies compromised environments to prevent location spoofing.
-*   **Encryption:** `NMH3Encryptor` provides CryptoKit-based sealing of H3 indices before network transmission.
+### 4. Dynamic Geofencing (iOS 20-Region Limit Workaround)
 
-### 5. MapKit Extensions
-Easily visualize H3 cells on an `MKMapView`.
+`NMH3GeofenceManager` overcomes iOS's 20 simultaneous monitored region limit by rotating the active set as the user moves. It subscribes to `NMH3LocationManager.currentCellPublisher` and uses `gridDisk` to find the nearest target cells, swapping far regions out and nearby ones in.
 
 ```swift
-import MapKit
-import NMH3
+let locationManager = NMH3LocationManager()
+let geofenceManager = NMH3GeofenceManager()
+let targetCells: [H3Cell] = [/* store locations etc. */]
 
-let mapView = MKMapView()
-let cell = NMH3Kit.shared.cell(for: someCoord, resolution: .r9)
+geofenceManager.monitorCells(targetCells, trackingWith: locationManager) { cell in
+    print("Entered zone: \(cell.string)")
+} onExit: { cell in
+    print("Left zone: \(cell.string)")
+}
 
-// Draw cell boundary on map
-let overlay = mapView.addH3Cell(cell, color: .blue.withAlphaComponent(0.2))
+locationManager.start()
+```
+
+### 5. Traversal & Hierarchy
+
+```swift
+let kit = NMH3Kit.shared
+
+// Neighbours (k-ring disk, k=1 → 7 cells for a hexagon)
+let neighbors = kit.kRing(around: cell, k: 1)
+
+// Exact ring at distance k (6*k cells for a hexagon)
+let ring = kit.hexRing(around: cell, k: 2)
+
+// Grid distance between two cells
+let dist = kit.distance(from: cellA, to: cellB)
+
+// Shortest path through cells
+let path = kit.line(from: cellA, to: cellB)
+
+// Hierarchical parent/child
+let parent = cell.parent(at: .r8)       // coarser cell
+let children = parent.children(at: .r9) // 7 children (or 6 for a pentagon)
+
+// Compact a set of cells (group uniform children into parents)
+let compacted = kit.compact(manyCells)
+let restored  = kit.uncompact(compacted, to: .r9)
+
+// Fill a polygon with cells
+let cells = kit.polyfill(polygon: coordinates, resolution: .r8)
+```
+
+### 6. Security
+
+```swift
+// Asymmetric encryption (ECIES: ephemeral P-256 + HKDF-SHA256 + AES-GCM)
+let encryptor = NMH3Encryptor()
+let envelope = try encryptor.encrypt(cell.index, publicKey: recipientPublicKey)
+
+// Symmetric encryption (AES-GCM)
+let sealed = try encryptor.seal(cell.index, symmetricKey: myKey)
+
+// Jailbreak detection (best-effort heuristic — see API docs for caveats)
+let isCompromised = NMH3JailbreakDetector().isCompromised()
+
+// Privacy fuzzing: shift index by a random neighbour offset before analytics
+let fuzzed = NMH3PrivacyLayer().obfuscatedIndex(cell.index, fuzz: 1)
 ```
 
 ---
 
-## 🔒 Security Mandates
-1.  **Zero-Retention:** Raw `CLLocationCoordinate2D` data must be zeroed immediately after conversion.
-2.  **No Persistence:** H3 indices should be treated as ephemeral unless explicitly encrypted.
-3.  **Anonymity:** Use `NMH3PrivacyLayer.obfuscatedIndex()` to shift indices by a neighbor offset before sending data to analytics.
+## 🔒 Security Notes
+
+1.  **Privacy:** Raw `CLLocationCoordinate2D` values are never stored in properties or logged — only H3 cell indices are retained. However, true memory scrubbing of Apple framework objects is not achievable via Swift value-type semantics.
+2.  **Encryption:** `NMH3Encryptor.encrypt(_:publicKey:)` implements real ECIES (ephemeral ECDH + HKDF-SHA256 + AES-GCM). `seal(_:symmetricKey:)` uses AES-GCM directly.
+3.  **Jailbreak detection:** `NMH3JailbreakDetector.isCompromised()` is a **best-effort heuristic** that checks static file paths and sandbox write access. It is bypassable by path-hiding tweaks and must not be used as a sole security gate. Combine with server-side checks and certificate pinning.
+4.  **Backend interop:** H3 indices are canonical (bit-for-bit compatible with `h3-go`, `h3-pg`, `h3-js`, etc.).
