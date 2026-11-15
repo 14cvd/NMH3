@@ -148,10 +148,12 @@ let cells = kit.polyfill(polygon: coordinates, resolution: .r8)
 ```swift
 // Asymmetric encryption (ECIES: ephemeral P-256 + HKDF-SHA256 + AES-GCM)
 let encryptor = NMH3Encryptor()
-let envelope = try encryptor.encrypt(cell.index, publicKey: recipientPublicKey)
+let envelope = try encryptor.encrypt(cell.index, publicKey: recipientPublicKey) // 101 bytes
+let index = try encryptor.decrypt(envelope, privateKey: recipientPrivateKey)
 
 // Symmetric encryption (AES-GCM)
 let sealed = try encryptor.seal(cell.index, symmetricKey: myKey)
+let opened = try encryptor.open(sealed, symmetricKey: myKey)
 
 // Jailbreak detection (best-effort heuristic — see API docs for caveats)
 let isCompromised = NMH3JailbreakDetector().isCompromised()
@@ -165,6 +167,14 @@ let fuzzed = NMH3PrivacyLayer().obfuscatedIndex(cell.index, fuzz: 1)
 ## 🔒 Security Notes
 
 1.  **Privacy:** Raw `CLLocationCoordinate2D` values are never stored in properties or logged — only H3 cell indices are retained. However, true memory scrubbing of Apple framework objects is not achievable via Swift value-type semantics.
-2.  **Encryption:** `NMH3Encryptor.encrypt(_:publicKey:)` implements real ECIES (ephemeral ECDH + HKDF-SHA256 + AES-GCM). `seal(_:symmetricKey:)` uses AES-GCM directly.
+2.  **Encryption:** `NMH3Encryptor.encrypt(_:publicKey:)` uses ephemeral P-256 ECDH + HKDF-SHA256 + AES-GCM. Envelope (101 bytes): 65-byte X9.63 ephemeral public key ‖ 12-byte nonce ‖ 8-byte ciphertext (little-endian index) ‖ 16-byte tag; HKDF salt `NMH3-ECIES-v1`, info = the ephemeral public key. `decrypt(_:privateKey:)` is the reference decoder. `seal(_:symmetricKey:)` uses AES-GCM directly.
 3.  **Jailbreak detection:** `NMH3JailbreakDetector.isCompromised()` is a **best-effort heuristic** that checks static file paths and sandbox write access. It is bypassable by path-hiding tweaks and must not be used as a sole security gate. Combine with server-side checks and certificate pinning.
 4.  **Backend interop:** H3 indices are canonical (bit-for-bit compatible with `h3-go`, `h3-pg`, `h3-js`, etc.).
+
+---
+
+## 📄 License
+
+NMH3 is released under the [MIT License](LICENSE).
+
+It bundles Uber's [H3](https://github.com/uber/h3) C library (v4.1.0) in `Sources/NMCH3/h3`, which remains under the [Apache License 2.0](Sources/NMCH3/h3/LICENSE) — see its [NOTICE](Sources/NMCH3/h3/NOTICE).

@@ -42,7 +42,14 @@ public final class NMH3BatteryOptimizer: @unchecked Sendable {
 
     // MARK: - Init
 
-    public init() {
+    /// Creates an optimizer.
+    ///
+    /// - Parameter monitorsMotion: When `true` (the default), stationary detection via
+    ///   `CMMotionActivityManager` is started on iOS. This shows the Motion & Fitness
+    ///   permission prompt and requires `NSMotionUsageDescription` in the host app's
+    ///   Info.plist. If the key is missing, motion monitoring is skipped instead of
+    ///   letting iOS terminate the app. Pass `false` to rely on battery level only.
+    public init(monitorsMotion: Bool = true) {
         #if canImport(UIKit)
         UIDevice.current.isBatteryMonitoringEnabled = true
         // Observe both level and state changes
@@ -52,7 +59,9 @@ public final class NMH3BatteryOptimizer: @unchecked Sendable {
             .store(in: &cancellables)
         #endif
         refreshBatteryProfile()
-        startMotionUpdates()
+        if monitorsMotion {
+            startMotionUpdates()
+        }
     }
 
     // MARK: - Public
@@ -84,6 +93,14 @@ public final class NMH3BatteryOptimizer: @unchecked Sendable {
     private func startMotionUpdates() {
         #if os(iOS)
         guard CMMotionActivityManager.isActivityAvailable() else { return }
+        // Accessing motion data without a usage description is a privacy violation that
+        // makes iOS kill the app, so never start updates when the key is absent.
+        guard Bundle.main.object(forInfoDictionaryKey: "NSMotionUsageDescription") != nil else {
+            #if DEBUG
+            print("NMH3BatteryOptimizer: NSMotionUsageDescription missing from Info.plist; stationary detection disabled.")
+            #endif
+            return
+        }
         motionManager.startActivityUpdates(to: .main) { [weak self] activity in
             guard let self, let activity else { return }
             let stationary = activity.stationary

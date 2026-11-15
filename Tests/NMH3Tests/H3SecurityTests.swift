@@ -66,7 +66,7 @@ final class H3SecurityTests: XCTestCase {
 
         // Tampered ciphertext must fail authentication
         var tampered = sealed.ciphertext
-        tampered[0] ^= 0xFF
+        tampered[tampered.startIndex] ^= 0xFF
         XCTAssertThrowsError(
             try AES.GCM.open(
                 AES.GCM.SealedBox(nonce: sealed.nonce, ciphertext: tampered, tag: sealed.tag),
@@ -74,6 +74,57 @@ final class H3SecurityTests: XCTestCase {
             ),
             "Opening tampered ciphertext must throw an authentication error"
         )
+    }
+
+    // MARK: - decrypt() / open() tests
+
+    func testEncryptDecryptRoundTrip() throws {
+        let recipientKey = P256.KeyAgreement.PrivateKey()
+        let index: H3Index = 0x8928308280fffff
+
+        let envelope = try encryptor.encrypt(index, publicKey: recipientKey.publicKey)
+        XCTAssertEqual(envelope.first, 0x04, "Envelope must start with an uncompressed X9.63 point")
+        XCTAssertEqual(try encryptor.decrypt(envelope, privateKey: recipientKey), index)
+    }
+
+    func testDecryptWithWrongKeyThrows() throws {
+        let recipientKey = P256.KeyAgreement.PrivateKey()
+        let envelope = try encryptor.encrypt(0x8928308280fffff, publicKey: recipientKey.publicKey)
+
+        XCTAssertThrowsError(try encryptor.decrypt(envelope, privateKey: P256.KeyAgreement.PrivateKey()))
+    }
+
+    func testDecryptTamperedEnvelopeThrows() throws {
+        let recipientKey = P256.KeyAgreement.PrivateKey()
+        var envelope = try encryptor.encrypt(0x8928308280fffff, publicKey: recipientKey.publicKey)
+        envelope[envelope.index(envelope.startIndex, offsetBy: 80)] ^= 0x01 // inside the ciphertext
+
+        XCTAssertThrowsError(try encryptor.decrypt(envelope, privateKey: recipientKey))
+    }
+
+    func testDecryptRejectsWrongLength() {
+        XCTAssertThrowsError(try encryptor.decrypt(Data(count: 100), privateKey: P256.KeyAgreement.PrivateKey())) { error in
+            XCTAssertEqual(error as? NMH3Encryptor.EnvelopeError, .invalidLength(100))
+        }
+    }
+
+    func testDecryptAcceptsSlicedEnvelope() throws {
+        let recipientKey = P256.KeyAgreement.PrivateKey()
+        let index: H3Index = 0x8928308280fffff
+        let envelope = try encryptor.encrypt(index, publicKey: recipientKey.publicKey)
+        let framed = Data([0xAA, 0xBB]) + envelope
+        let slice = framed[framed.index(framed.startIndex, offsetBy: 2)...]
+
+        XCTAssertEqual(try encryptor.decrypt(Data(slice), privateKey: recipientKey), index)
+        XCTAssertEqual(try encryptor.decrypt(slice, privateKey: recipientKey), index)
+    }
+
+    func testSealOpenRoundTrip() throws {
+        let key = SymmetricKey(size: .bits256)
+        let index: H3Index = 0x8928308280fffff
+
+        let box = try encryptor.seal(index, symmetricKey: key)
+        XCTAssertEqual(try encryptor.open(box, symmetricKey: key), index)
     }
 }
 

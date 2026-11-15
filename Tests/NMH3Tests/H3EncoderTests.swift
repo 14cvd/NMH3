@@ -61,7 +61,7 @@ final class H3EncoderTests: XCTestCase {
             for res in [H3Resolution.r3, .r6, .r9, .r12] {
                 let cell = NMH3Kit.shared.cell(for: coord, resolution: res)
                 let center = NMH3Kit.shared.center(of: cell)
-                let roundTripped = NMH3Kit.shared.cell(for: center.coordinate, resolution: res)
+                let roundTripped = NMH3Kit.shared.cell(for: center, resolution: res)
                 XCTAssertEqual(
                     cell.index, roundTripped.index,
                     "Round-trip failed at res \(res.rawValue): \(coord)"

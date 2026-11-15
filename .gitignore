@@ -40,3 +40,7 @@ playground.xcworkspace
 *.moved-aside
 *.xcuserstate
 *.xcscmblueprint
+
+### Swift Package Manager
+.build/
+.swiftpm/
