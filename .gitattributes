@@ -1,0 +1,3 @@
+# Uber's H3 C core is vendored: keep it out of GitHub's language stats so the
+# repository is reported as Swift.
+Sources/NMCH3/h3/** linguist-vendored
