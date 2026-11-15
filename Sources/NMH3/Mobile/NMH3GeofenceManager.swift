@@ -1,5 +1,6 @@
 import CoreLocation
 import Combine
+import NMCH3
 
 /// Dynamically monitors H3 cell regions, rotating the active set as the user moves.
 ///
@@ -16,8 +17,6 @@ public final class NMH3GeofenceManager: NSObject, CLLocationManagerDelegate, @un
 
     /// iOS hard limit on simultaneously monitored regions.
     private static let regionLimit = 20
-    /// Grid-disk radius used to find candidate cells around the user.
-    private static let lookAheadK = 5
 
     // MARK: - Private State
 
@@ -102,30 +101,34 @@ public final class NMH3GeofenceManager: NSObject, CLLocationManagerDelegate, @un
     private func rotateRegions(userCell: H3Cell) {
         currentUserCell = userCell
 
-        // Find all target cells within look-ahead radius of user's current cell
-        let nearbyUserCells = Set(NMH3Kit.shared.kRing(around: userCell, k: NMH3GeofenceManager.lookAheadK))
-        let nearby = allTargetCells.filter { nearbyUserCells.contains($0) }
-
-        // If no targets are near, fall back to the globally closest ones by grid distance
-        let candidates: [H3Cell]
-        if nearby.isEmpty {
-            candidates = allTargetCells
-                .compactMap { cell -> (H3Cell, Int)? in
-                    let d = NMH3Kit.shared.distance(from: userCell, to: cell)
-                    return d >= 0 ? (cell, d) : nil
-                }
-                .sorted { $0.1 < $1.1 }
-                .prefix(NMH3GeofenceManager.regionLimit)
-                .map(\.0)
-        } else {
-            candidates = Array(nearby.prefix(NMH3GeofenceManager.regionLimit))
-        }
-
-        let desired = Set(candidates)
+        let desired = Set(Self.nearestTargets(
+            to: userCell,
+            from: allTargetCells,
+            limit: NMH3GeofenceManager.regionLimit
+        ))
         let toAdd = desired.subtracting(monitoredCells)
         let toRemove = monitoredCells.subtracting(desired)
 
         updateMonitoredRegions(add: toAdd, remove: toRemove)
+    }
+
+    /// Returns up to `limit` target cells ordered by great-circle distance between
+    /// cell centers, nearest first.
+    ///
+    /// Distance is measured geographically rather than with `gridDistance`, so it works
+    /// when the target cells use a different resolution than the user's cell and when
+    /// cells are far apart (where `gridDistance` fails across icosahedron faces).
+    static func nearestTargets(to userCell: H3Cell, from targets: [H3Cell], limit: Int) -> [H3Cell] {
+        guard limit > 0, !targets.isEmpty else { return [] }
+        let origin = userCell.center
+        return targets
+            .map { cell -> (cell: H3Cell, km: Double) in
+                let c = cell.center
+                return (cell, NMH3HaversineDistanceKm(origin.latitude, origin.longitude, c.latitude, c.longitude))
+            }
+            .sorted { $0.km < $1.km }
+            .prefix(limit)
+            .map(\.cell)
     }
 
     private func updateMonitoredRegions(add: Set<H3Cell>, remove: Set<H3Cell>) {
